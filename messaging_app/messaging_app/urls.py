@@ -23,8 +23,8 @@ from django.views.generic import RedirectView
 # API Documentation URLs
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api-auth/', include('rest_framework.urls')),  # Django REST Framework auth URLs
     path('api/v1/docs/', include('api.urls')),
-    path('api/v1/auth/', include('rest_framework.urls')),
     path('api/v1/accounts/', include('accounts.urls')),
     path('api/v1/messaging/', include('messaging.urls')),
     path('api/v1/notifications/', include('notifications.urls')),
