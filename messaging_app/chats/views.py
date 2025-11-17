@@ -18,7 +18,7 @@ from django.utils import timezone
 from .models import User, Conversation, Message, ConversationParticipant, UserRole
 from .serializers import (
     UserSerializer, ConversationSerializer, MessageSerializer,
-    ConversationListSerializer, MessageListSerializer
+    ConversationListSerializer, UserListSerializer
 )
 from .permissions import IsParticipant, IsConversationParticipant
 
@@ -312,10 +312,10 @@ class ConversationViewSet(viewsets.GenericViewSet):
         # Pagination
         page = self.paginate_queryset(messages)
         if page is not None:
-            serializer = MessageListSerializer(page, many=True, context={'request': request})
+            serializer = MessageSerializer(page, many=True, context={'request': request})
             return self.get_paginated_response(serializer.data)
         
-        serializer = MessageListSerializer(messages, many=True, context={'request': request})
+        serializer = MessageSerializer(messages, many=True, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['post'])
@@ -507,7 +507,7 @@ class ConversationMessagesViewSet(viewsets.GenericViewSet):
     
     Provides direct endpoints for conversation messages.
     """
-    serializer_class = MessageListSerializer
+    serializer_class = MessageSerializer
     permission_classes = [IsAuthenticated, IsParticipant]
     
     def get_conversation(self):
@@ -547,10 +547,10 @@ class ConversationMessagesViewSet(viewsets.GenericViewSet):
         # Pagination
         page = self.paginate_queryset(messages)
         if page is not None:
-            serializer = MessageListSerializer(page, many=True, context={'request': request})
+            serializer = MessageSerializer(page, many=True, context={'request': request})
             return self.get_paginated_response(serializer.data)
         
-        serializer = MessageListSerializer(messages, many=True, context={'request': request})
+        serializer = MessageSerializer(messages, many=True, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     def create(self, request, conversation_id=None):
