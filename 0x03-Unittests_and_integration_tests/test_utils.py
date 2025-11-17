@@ -2,7 +2,7 @@
 """Unit tests for utils module."""
 
 import unittest
-from typing import Dict, Tuple, Any, List
+from typing import Dict, Tuple, Any
 from parameterized import parameterized
 from utils import access_nested_map, get_json, memoize
 from unittest.mock import patch, Mock
@@ -11,19 +11,23 @@ from unittest.mock import patch, Mock
 class TestAccessNestedMap(unittest.TestCase):
     """Test class for access_nested_map function."""
 
-    @parameterized.expand([
+    test_cases = [
         ({"a": 1}, ("a",), 1),
         ({"a": {"b": 2}}, ("a",), {"b": 2}),
         ({"a": {"b": 2}}, ("a", "b"), 2),
-    ])
+    ]
+
+    @parameterized.expand(test_cases)
     def test_access_nested_map(self, nested_map: Dict[str, Any], path: Tuple[str, ...], expected: Any) -> None:
         """Test access_nested_map returns expected value."""
         self.assertEqual(access_nested_map(nested_map, path), expected)
 
-    @parameterized.expand([
+    exception_cases = [
         ({}, ("a",), "a"),
         ({"a": 1}, ("a", "b"), "b"),
-    ])
+    ]
+
+    @parameterized.expand(exception_cases)
     def test_access_nested_map_exception(self, nested_map: Dict[str, Any], path: Tuple[str, ...], expected_key: str) -> None:
         """Test access_nested_map raises KeyError with expected message."""
         with self.assertRaises(KeyError) as cm:
@@ -34,10 +38,12 @@ class TestAccessNestedMap(unittest.TestCase):
 class TestGetJson(unittest.TestCase):
     """Test class for get_json function."""
 
-    @parameterized.expand([
+    json_cases = [
         ("http://example.com", {"payload": True}),
         ("http://holberton.io", {"payload": False}),
-    ])
+    ]
+
+    @parameterized.expand(json_cases)
     @patch('utils.requests.get')
     def test_get_json(self, test_url: str, test_payload: Dict[str, Any], mock_get: Mock) -> None:
         """Test get_json returns expected payload."""
@@ -63,7 +69,9 @@ class TestMemoize(unittest.TestCase):
                 return self.a_method()
 
         test_instance = TestClass()
-        with patch.object(test_instance, 'a_method', return_value=42) as mock_method:
+        with patch.object(
+            test_instance, 'a_method', return_value=42
+        ) as mock_method:
             result1 = test_instance.a_property
             result2 = test_instance.a_property
             self.assertEqual(result1, 42)
