@@ -50,7 +50,7 @@ class TestGetJson(unittest.TestCase):
 
 
 class TestMemoize(unittest.TestCase):
-    """Test class for memoize decorator."""
+    """Test class for memoize."""
 
     def test_memoize(self) -> None:
         """Test memoize decorator caches method calls."""
