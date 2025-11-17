@@ -33,15 +33,21 @@ class TestGithubOrgClient(unittest.TestCase):
             result = client._public_repos_url
             self.assertEqual(result, "https://api.github.com/orgs/test/repos")
 
-    @patch('client.get_json')
-    def test_public_repos(self, mock_get_json: Mock) -> None:
-        """Test public_repos returns list of repo names."""
-        mock_get_json.return_value = [{"name": "repo1"}, {"name": "repo2"}]
-        with patch('client.GithubOrgClient._public_repos_url', new_callable=lambda: "https://api.github.com/orgs/test/repos"):
-            client = GithubOrgClient("test")
+    def test_public_repos(self) -> None:
+        """Test public_repos returns expected repos."""
+        with patch('client.GithubOrgClient.repos_payload') as mock_repos_payload:
+            mock_repos_payload.return_value = repos_payload
+            client = GithubOrgClient("google")
             result = client.public_repos
-            self.assertEqual(result, ["repo1", "repo2"])
-            mock_get_json.assert_called_once_with("https://api.github.com/orgs/test/repos")
+            self.assertEqual(result, expected_repos)
+
+    def test_public_repos_with_license(self) -> None:
+        """Test public_repos with license filter."""
+        with patch('client.GithubOrgClient.repos_payload') as mock_repos_payload:
+            mock_repos_payload.return_value = repos_payload
+            client = GithubOrgClient("google")
+            result = client.public_repos(license="apache-2.0")
+            self.assertEqual(result, apache2_repos)
 
     @parameterized.expand([
         ({"license": {"key": "my_license"}}, "my_license", True),
