@@ -1,989 +1,581 @@
-"""
-Comprehensive database schema for Django-based messaging platform.
+# Django REST Framework API Documentation
 
-This module implements three interconnected models designed for a scalable messaging
-platform with enhanced user management, conversation tracking, and message handling.
+This document provides comprehensive documentation for the messaging platform API implementation using Django REST Framework.
 
-The schema follows Django ORM best practices and implements:
-- Extended AbstractBaseUser for authentication
-- Many-to-many relationships with custom through tables
-- Advanced constraints and validation
-- Optimized indexing strategies
-- Custom model managers for common operations
-- Soft deletion and audit trail capabilities
-"""
+## 📋 API Overview
 
-import uuid
-from django.db import models
-from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
-from django.core.exceptions import ValidationError
-from django.core.validators import validate_email, RegexValidator
-from django.utils import timezone
-from django.contrib.auth.password_validation import validate_password
+The API provides RESTful endpoints for managing users, conversations, and messages in the messaging platform. All endpoints require authentication and follow REST conventions with proper HTTP status codes.
 
+## 🔗 Base URL and Versioning
 
-class UserRole(models.TextChoices):
-    """
-    Enumeration for user roles in the messaging platform.
-    
-    Defines the hierarchical role system supporting guest access,
-    host privileges for conversation creation, and admin capabilities
-    for system management.
-    """
-    GUEST = 'guest', 'Guest'
-    HOST = 'host', 'Host'
-    ADMIN = 'admin', 'Admin'
+- **Base URL**: `http://localhost:8000/api/`
+- **API Version**: v1
+- **Documentation**: Available at `/api/docs/`
 
+## 🔐 Authentication
 
-class UserManager(models.Manager):
-    """
-    Custom manager for User model providing enhanced query methods.
-    
-    Implements common user lookup patterns and authentication helpers
-    optimized for the messaging platform use case.
-    """
-    
-    def get_by_natural_key(self, email):
-        """Get user by case-insensitive email lookup."""
-        return self.get(email__iexact=email)
-    
-    def create_user(self, email, password=None, **extra_fields):
-        """Create a standard user with email and password."""
-        if not email:
-            raise ValueError('Users must have an email address')
-        
-        # Normalize email
-        email = self.normalize_email(email)
-        user = self.model(email=email, **extra_fields)
-        user.set_password(password)
-        user.full_clean()  # Validate model constraints
-        user.save(using=self._db)
-        return user
-    
-    def create_superuser(self, email, password=None, **extra_fields):
-        """Create a superuser with admin privileges."""
-        extra_fields.setdefault('role', UserRole.ADMIN)
-        extra_fields.setdefault('is_staff', True)
-        extra_fields.setdefault('is_superuser', True)
-        
-        if extra_fields.get('role') != UserRole.ADMIN:
-            raise ValueError('Superuser must have admin role')
-        if extra_fields.get('is_staff') is not True:
-            raise ValueError('Superuser must have is_staff=True')
-        if extra_fields.get('is_superuser') is not True:
-            raise ValueError('Superuser must have is_superuser=True')
-        
-        return self.create_user(email, password, **extra_fields)
+All API endpoints require authentication using JWT tokens or Django session authentication.
 
+### Login Endpoint
+```
+POST /api/v1/auth/login/
+Content-Type: application/json
 
-class User(AbstractBaseUser, PermissionsMixin):
-    """
-    Extended User model for the messaging platform.
-    
-    Implements comprehensive user management with role-based access control,
-    profile information, and audit trail capabilities. This model extends
-    Django's AbstractBaseUser to provide seamless authentication integration
-    while adding messaging platform specific functionality.
-    
-    Key Features:
-    - UUID-based primary key for scalability
-    - Case-insensitive email handling
-    - Role-based permissions (guest, host, admin)
-    - Comprehensive profile information
-    - Audit trail with timezone awareness
-    - Validation for all user data
-    """
-    
-    # Primary key - UUID for scalability and security
-    user_id = models.UUIDField(
-        primary_key=True,
-        default=uuid.uuid4,
-        editable=False,
-        help_text="Unique identifier for the user account"
-    )
-    
-    # Required fields for authentication and display
-    first_name = models.CharField(
-        max_length=30,
-        help_text="User's first name for display purposes"
-    )
-    last_name = models.CharField(
-        max_length=150,
-        help_text="User's last name for display purposes"
-    )
-    
-    # Authentication fields
-    email = models.EmailField(
-        unique=True,
-        validators=[validate_email],
-        help_text="Email address used for authentication (case-insensitive unique)"
-    )
-    password_hash = models.CharField(
-        max_length=128,
-        help_text="Hashed password using Django's password utilities"
-    )
-    
-    # Optional profile information
-    phone_number = models.CharField(
-        max_length=20,
-        null=True,
-        blank=True,
-        validators=[
-            RegexValidator(
-                regex=r'^\+?[1-9]\d{1,14}$',
-                message="Phone number must be in international format: +1234567890"
-            )
-        ],
-        help_text="Optional phone number in international format"
-    )
-    
-    # Role-based access control
-    role = models.CharField(
-        max_length=10,
-        choices=UserRole.choices,
-        default=UserRole.HOST,
-        help_text="User role determining platform access level"
-    )
-    
-    # Audit fields
-    created_at = models.DateTimeField(
-        auto_now_add=True,
-        help_text="Timestamp when user account was created"
-    )
-    
-    # Django auth system integration
-    is_staff = models.BooleanField(
-        default=False,
-        help_text="Designates whether the user can log into Django admin"
-    )
-    is_active = models.BooleanField(
-        default=True,
-        help_text="Designates whether this user should be treated as active"
-    )
-    
-    # Additional profile fields
-    is_email_verified = models.BooleanField(
-        default=False,
-        help_text="Indicates if user has verified their email address"
-    )
-    last_login_at = models.DateTimeField(
-        null=True,
-        blank=True,
-        help_text="Timestamp of last successful login"
-    )
-    
-    # Metadata
-    objects = UserManager()
-    
-    # Django auth configuration
-    USERNAME_FIELD = 'email'
-    REQUIRED_FIELDS = ['first_name', 'last_name', 'role']
-    
-    class Meta:
-        """
-        Database configuration for User model.
-        
-        Implements comprehensive indexing strategy for optimal query performance
-        and data integrity constraints.
-        """
-        db_table = 'users'
-        verbose_name = 'User'
-        verbose_name_plural = 'Users'
-        
-        # Indexing strategy
-        indexes = [
-            # Primary key is automatically indexed
-            models.Index(fields=['email'], name='user_email_idx'),
-            models.Index(fields=['role'], name='user_role_idx'),
-            models.Index(fields=['is_active'], name='user_active_idx'),
-            models.Index(fields=['created_at'], name='user_created_idx'),
-            # Composite indexes for common query patterns
-            models.Index(
-                fields=['role', 'is_active'],
-                name='user_role_active_idx'
-            ),
-            models.Index(
-                fields=['email', 'is_active'],
-                name='user_email_active_idx'
-            ),
-        ]
-        
-        # Constraints for data integrity
-        constraints = [
-            models.CheckConstraint(
-                check=models.Q(role__in=UserRole.values),
-                name='valid_user_role'
-            ),
-            models.CheckConstraint(
-                check=models.Q(first_name__isnull=False) & models.Q(first_name__gt=''),
-                name='non_empty_first_name'
-            ),
-            models.CheckConstraint(
-                check=models.Q(last_name__isnull=False) & models.Q(last_name__gt=''),
-                name='non_empty_last_name'
-            ),
-        ]
-    
-    def __str__(self):
-        """String representation of the user."""
-        return f"{self.first_name} {self.last_name} ({self.email})"
-    
-    def clean(self):
-        """Validate user model data."""
-        super().clean()
-        
-        # Additional validation beyond field validators
-        if self.email:
-            # Ensure email is normalized for uniqueness checks
-            self.email = self.normalize_email(self.email)
-        
-        # Role validation
-        if self.role not in UserRole.values:
-            raise ValidationError({
-                'role': f'Invalid role. Must be one of: {", ".join(UserRole.values)}'
-            })
-    
-    def save(self, *args, **kwargs):
-        """Save user with validation and normalization."""
-        # Normalize email
-        self.email = self.normalize_email(self.email)
-        
-        # Full validation before save
-        self.full_clean()
-        super().save(*args, **kwargs)
-    
-    @property
-    def display_name(self):
-        """Return user's display name."""
-        return f"{self.first_name} {self.last_name}".strip()
-    
-    def can_create_conversations(self):
-        """Check if user can create conversations (host or admin)."""
-        return self.role in [UserRole.HOST, UserRole.ADMIN]
-    
-    def can_moderate(self):
-        """Check if user has moderation privileges (admin only)."""
-        return self.role == UserRole.ADMIN
-    
-    def get_conversations(self):
-        """Get all conversations the user is participating in."""
-        return self.conversation_participants.filter(
-            conversation__is_deleted=False
-        ).select_related('conversation')
-    
-    def get_message_count(self):
-        """Get total number of messages sent by this user."""
-        return self.sent_messages.filter(is_deleted=False).count()
-    
-    def get_unread_message_count(self, conversation=None):
-        """Get count of unread messages for this user."""
-        messages = self.received_messages.filter(
-            is_read=False,
-            is_deleted=False
-        )
-        if conversation:
-            messages = messages.filter(conversation=conversation)
-        return messages.count()
+{
+    "email": "user@example.com",
+    "password": "password123"
+}
+```
 
+Response:
+```json
+{
+    "refresh": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
+    "access": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9..."
+}
+```
 
-class ConversationParticipantsManager(models.Manager):
-    """
-    Manager for ConversationParticipants through table.
-    
-    Provides optimized methods for participant management and
-    prevents duplicate memberships and self-conversations.
-    """
-    
-    def add_participant(self, conversation, user):
-        """Add a participant to a conversation with validation."""
-        # Prevent adding the same participant twice
-        if self.filter(conversation=conversation, user=user).exists():
-            raise ValidationError(
-                f"User {user.email} is already a participant in this conversation"
-            )
-        
-        # Create participation record
-        return self.create(conversation=conversation, user=user)
-    
-    def remove_participant(self, conversation, user):
-        """Remove a participant from a conversation."""
-        deleted_count = self.filter(
-            conversation=conversation,
-            user=user
-        ).delete()[0]
-        
-        if deleted_count == 0:
-            raise ValidationError(
-                f"User {user.email} is not a participant in this conversation"
-            )
-    
-    def get_participant_count(self, conversation):
-        """Get number of participants in a conversation."""
-        return self.filter(conversation=conversation).count()
+### Token Usage
+Include the access token in the Authorization header:
+```
+Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...
+```
 
+## 👥 User Management
 
-class ConversationParticipants(models.Model):
-    """
-    Through table for many-to-many relationship between User and Conversation.
-    
-    Implements the bidirectional relationship between users and conversations
-    with validation to prevent duplicate memberships and self-conversations.
-    Provides a clean interface for participant management.
-    """
-    
-    conversation = models.ForeignKey(
-        'Conversation',
-        on_delete=models.CASCADE,
-        related_name='conversation_participants',
-        help_text="Conversation this participation record belongs to"
-    )
-    user = models.ForeignKey(
-        User,
-        on_delete=models.CASCADE,
-        related_name='conversation_participants',
-        help_text="User participating in the conversation"
-    )
-    joined_at = models.DateTimeField(
-        auto_now_add=True,
-        help_text="Timestamp when user joined the conversation"
-    )
-    is_admin = models.BooleanField(
-        default=False,
-        help_text="Whether this user has admin privileges in the conversation"
-    )
-    last_read_at = models.DateTimeField(
-        null=True,
-        blank=True,
-        help_text="Timestamp of last message read by this participant"
-    )
-    
-    # Manager
-    objects = ConversationParticipantsManager()
-    
-    class Meta:
-        """Database configuration for ConversationParticipants."""
-        db_table = 'conversation_participants'
-        verbose_name = 'Conversation Participant'
-        verbose_name_plural = 'Conversation Participants'
-        
-        # Ensure each user can only participate in a conversation once
-        unique_together = [
-            ('conversation', 'user')
-        ]
-        
-        # Indexing for performance
-        indexes = [
-            models.Index(fields=['conversation'], name='cp_conversation_idx'),
-            models.Index(fields=['user'], name='cp_user_idx'),
-            models.Index(fields=['joined_at'], name='cp_joined_idx'),
-            models.Index(fields=['is_admin'], name='cp_admin_idx'),
-            # Composite indexes for common queries
-            models.Index(
-                fields=['conversation', 'is_admin'],
-                name='cp_conversation_admin_idx'
-            ),
-            models.Index(
-                fields=['user', 'conversation'],
-                name='cp_user_conversation_idx'
-            ),
-        ]
-    
-    def __str__(self):
-        """String representation of the participation record."""
-        return f"{self.user.display_name} in {self.conversation.conversation_id}"
+### Get Current User Profile
+```
+GET /api/v1/users/me/
+```
 
+**Response (200 OK)**:
+```json
+{
+    "user_id": "550e8400-e29b-41d4-a716-446655440000",
+    "email": "user@example.com",
+    "first_name": "John",
+    "last_name": "Doe",
+    "display_name": "John Doe",
+    "phone_number": "+1234567890",
+    "role": "host",
+    "is_active": true,
+    "created_at": "2023-11-17T10:00:00Z"
+}
+```
 
-class ConversationManager(models.Manager):
-    """
-    Custom manager for Conversation model.
-    
-    Implements common conversation operations and validation logic
-    for participant management and conversation filtering.
-    """
-    
-    def create_conversation(self, creator, participant_users, **kwargs):
-        """
-        Create a new conversation with validation.
-        
-        Args:
-            creator: User creating the conversation
-            participant_users: QuerySet or list of User objects
-            **kwargs: Additional conversation fields
-        
-        Returns:
-            Conversation: Created conversation instance
-        
-        Raises:
-            ValidationError: If participant requirements are not met
-        """
-        if not creator.can_create_conversations():
-            raise ValidationError(
-                f"User {creator.email} does not have permission to create conversations"
-            )
-        
-        # Convert to list if queryset
-        if hasattr(participant_users, 'all'):
-            participants_list = list(participant_users)
-        else:
-            participants_list = list(participant_users)
-        
-        # Add creator to participants if not already included
-        if creator not in participants_list:
-            participants_list.append(creator)
-        
-        # Validate participants
-        if len(participants_list) < 2:
-            raise ValidationError("A conversation must have at least 2 participants")
-        
-        # Check for duplicate users
-        unique_participants = list(set(participants_list))
-        if len(unique_participants) != len(participants_list):
-            raise ValidationError("Duplicate participants are not allowed")
-        
-        # Validate that no participant is the creator in a one-on-one conversation
-        if len(unique_participants) == 2 and creator in unique_participants:
-            other_participant = next(u for u in unique_participants if u != creator)
-            # Check if conversation already exists between these two users
-            existing = self.get_conversation_between_users(creator, other_participant)
-            if existing:
-                raise ValidationError(
-                    f"Conversation already exists between {creator.email} and {other_participant.email}"
-                )
-        
-        # Create conversation
-        conversation = self.create(**kwargs)
-        
-        # Add participants
-        for user in unique_participants:
-            is_admin = (user == creator)  # Creator becomes admin
-            ConversationParticipants.objects.create(
-                conversation=conversation,
-                user=user,
-                is_admin=is_admin
-            )
-        
-        return conversation
-    
-    def get_conversation_between_users(self, user1, user2):
-        """
-        Get existing conversation between two users.
-        
-        Args:
-            user1: First user
-            user2: Second user
-        
-        Returns:
-            Conversation or None: Existing conversation or None
-        """
-        # Find conversations where both users are participants
-        conversations = self.filter(
-            conversation_participants__user=user1
-        ).filter(
-            conversation_participants__user=user2
-        ).filter(
-            participants__count=2
-        ).filter(
-            is_deleted=False
-        ).distinct()
-        
-        return conversations.first()
-    
-    def get_user_conversations(self, user):
-        """
-        Get all conversations for a user.
-        
-        Args:
-            user: User to get conversations for
-        
-        Returns:
-            QuerySet: Conversations the user participates in
-        """
-        return self.filter(
-            conversation_participants__user=user,
-            is_deleted=False
-        ).annotate(
-            participant_count=models.Count('conversation_participants')
-        ).order_by('-created_at')
+### Search Users
+```
+GET /api/v1/users/?search=john&role=host
+```
 
+**Query Parameters**:
+- `search`: Search by email, first name, or last name
+- `role`: Filter by role (guest, host, admin)
 
-class Conversation(models.Model):
-    """
-    Conversation model for managing group and direct message conversations.
-    
-    Implements conversation-level attributes and relationships with proper
-    participant management and business logic constraints.
-    
-    Key Features:
-    - UUID-based primary key for scalability
-    - Many-to-many relationship with User through ConversationParticipants
-    - Soft deletion capability
-    - Participant counting and management
-    - Audit trail with creation tracking
-    """
-    
-    # Primary key - UUID for scalability
-    conversation_id = models.UUIDField(
-        primary_key=True,
-        default=uuid.uuid4,
-        editable=False,
-        help_text="Unique identifier for the conversation"
-    )
-    
-    # Participants relationship (many-to-many through ConversationParticipants)
-    participants = models.ManyToManyField(
-        User,
-        through='ConversationParticipants',
-        related_name='conversations',
-        blank=False,
-        help_text="Users participating in this conversation"
-    )
-    
-    # Conversation attributes
-    title = models.CharField(
-        max_length=255,
-        null=True,
-        blank=True,
-        help_text="Optional conversation title for group chats"
-    )
-    description = models.TextField(
-        null=True,
-        blank=True,
-        help_text="Optional conversation description"
-    )
-    
-    # Audit fields
-    created_at = models.DateTimeField(
-        auto_now_add=True,
-        help_text="Timestamp when conversation was created"
-    )
-    created_by = models.ForeignKey(
-        User,
-        on_delete=models.CASCADE,
-        related_name='created_conversations',
-        help_text="User who created the conversation"
-    )
-    
-    # Soft deletion
-    is_deleted = models.BooleanField(
-        default=False,
-        help_text="Whether this conversation has been soft deleted"
-    )
-    deleted_at = models.DateTimeField(
-        null=True,
-        blank=True,
-        help_text="Timestamp when conversation was deleted (if soft deleted)"
-    )
-    
-    # Additional metadata
-    participant_count = models.PositiveIntegerField(
-        default=0,
-        help_text="Cached count of active participants"
-    )
-    message_count = models.PositiveIntegerField(
-        default=0,
-        help_text="Cached count of non-deleted messages"
-    )
-    
-    # Manager
-    objects = ConversationManager()
-    
-    class Meta:
-        """Database configuration for Conversation model."""
-        db_table = 'conversations'
-        verbose_name = 'Conversation'
-        verbose_name_plural = 'Conversations'
-        
-        # Indexing strategy
-        indexes = [
-            # Primary key is automatically indexed
-            models.Index(fields=['created_at'], name='conversation_created_idx'),
-            models.Index(fields=['created_by'], name='conversation_creator_idx'),
-            models.Index(fields=['is_deleted'], name='conversation_deleted_idx'),
-            models.Index(fields=['participant_count'], name='conversation_participant_count_idx'),
-            # Composite indexes for common queries
-            models.Index(
-                fields=['created_by', 'is_deleted'],
-                name='conversation_creator_deleted_idx'
-            ),
-            models.Index(
-                fields=['created_at', 'is_deleted'],
-                name='conversation_created_deleted_idx'
-            ),
-        ]
-        
-        # Constraints
-        constraints = [
-            models.CheckConstraint(
-                check=models.Q(participant_count__gte=2),
-                name='minimum_participants'
-            ),
-            models.CheckConstraint(
-                check=models.Q(message_count__gte=0),
-                name='non_negative_message_count'
-            ),
-        ]
-    
-    def __str__(self):
-        """String representation of the conversation."""
-        if self.title:
-            return f"{self.title} ({self.conversation_id})"
-        else:
-            participant_names = ", ".join([
-                p.user.display_name for p in 
-                self.conversation_participants.all()[:3]
-            ])
-            return f"Conversation: {participant_names} ({self.conversation_id})"
-    
-    def clean(self):
-        """Validate conversation data."""
-        super().clean()
-        
-        # Validate that conversation has at least 2 participants
-        if self.pk:  # Only validate for existing conversations
-            participant_count = self.conversation_participants.count()
-            if participant_count < 2:
-                raise ValidationError(
-                    "A conversation must have at least 2 participants"
-                )
-    
-    def save(self, *args, **kwargs):
-        """Save conversation with participant count update."""
-        # Update participant count
-        if self.pk:
-            self.participant_count = self.conversation_participants.count()
-        
-        super().save(*args, **kwargs)
-    
-    def add_participant(self, user, is_admin=False):
-        """Add a participant to this conversation."""
-        return ConversationParticipants.objects.add_participant(
-            conversation=self,
-            user=user
-        )
-    
-    def remove_participant(self, user):
-        """Remove a participant from this conversation."""
-        return ConversationParticipants.objects.remove_participant(
-            conversation=self,
-            user=user
-        )
-    
-    def get_participants(self):
-        """Get all active participants in this conversation."""
-        return User.objects.filter(
-            conversation_participants__conversation=self
-        )
-    
-    def get_message_count(self):
-        """Get count of non-deleted messages in this conversation."""
-        return self.messages.filter(is_deleted=False).count()
-    
-    def is_participant(self, user):
-        """Check if a user is a participant in this conversation."""
-        return self.conversation_participants.filter(user=user).exists()
-    
-    def get_admin_participants(self):
-        """Get participants with admin privileges in this conversation."""
-        return User.objects.filter(
-            conversation_participants__conversation=self,
-            conversation_participants__is_admin=True
-        )
+**Response (200 OK)**:
+```json
+{
+    "count": 1,
+    "next": null,
+    "previous": null,
+    "results": [
+        {
+            "user_id": "550e8400-e29b-41d4-a716-446655440000",
+            "email": "john@example.com",
+            "first_name": "John",
+            "last_name": "Doe",
+            "display_name": "John Doe",
+            "role": "host",
+            "is_active": true
+        }
+    ]
+}
+```
 
+## 💬 Conversation Management
 
-class MessageManager(models.Manager):
-    """
-    Custom manager for Message model.
-    
-    Implements common message operations and validation logic
-    for message creation, reading status, and soft deletion.
-    """
-    
-    def create_message(self, sender, conversation, content, **kwargs):
-        """
-        Create a new message with validation.
-        
-        Args:
-            sender: User sending the message
-            conversation: Conversation to send message in
-            content: Message content
-            **kwargs: Additional message fields
-        
-        Returns:
-            Message: Created message instance
-        
-        Raises:
-            ValidationError: If user cannot send messages or content is invalid
-        """
-        # Validate sender is participant
-        if not conversation.is_participant(sender):
-            raise ValidationError(
-                f"User {sender.email} is not a participant in this conversation"
-            )
-        
-        # Validate content
-        if not content or not content.strip():
-            raise ValidationError("Message content cannot be empty")
-        
-        if len(content) > 5000:  # Configurable max length
-            raise ValidationError(
-                f"Message content exceeds maximum length of 5000 characters"
-            )
-        
-        # Create message
-        message = self.create(
-            sender=sender,
-            conversation=conversation,
-            message_body=content.strip(),
-            **kwargs
-        )
-        
-        # Update conversation's message count
-        conversation.message_count = conversation.get_message_count()
-        conversation.save(update_fields=['message_count'])
-        
-        return message
+### List User Conversations
+```
+GET /api/v1/conversations/
+```
 
+**Response (200 OK)**:
+```json
+{
+    "count": 2,
+    "next": null,
+    "previous": null,
+    "results": [
+        {
+            "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
+            "title": "Team Chat",
+            "participant_count": 3,
+            "message_count": 15,
+            "created_at": "2023-11-17T10:00:00Z",
+            "unread_count": 2,
+            "last_message": {
+                "message_id": "550e8400-e29b-41d4-a716-446655440001",
+                "content": "Hello everyone!",
+                "sender": {
+                    "user_id": "550e8400-e29b-41d4-a716-446655440002",
+                    "first_name": "Jane",
+                    "last_name": "Smith",
+                    "display_name": "Jane Smith"
+                },
+                "sent_at": "2023-11-17T10:30:00Z"
+            }
+        }
+    ]
+}
+```
 
-class Message(models.Model):
-    """
-    Message model for individual messages within conversations.
-    
-    Implements message-level attributes, relationships, and business logic
-    for read receipts, soft deletion, and audit trail.
-    
-    Key Features:
-    - UUID-based primary key for scalability
-    - Sender and conversation relationships with CASCADE deletion
-    - Read receipt tracking
-    - Soft deletion capability
-    - Audit trail with timestamps
-    - Content validation and length limits
-    """
-    
-    # Primary key - UUID for scalability
-    message_id = models.UUIDField(
-        primary_key=True,
-        default=uuid.uuid4,
-        editable=False,
-        help_text="Unique identifier for the message"
-    )
-    
-    # Relationships
-    sender = models.ForeignKey(
-        User,
-        on_delete=models.CASCADE,
-        related_name='sent_messages',
-        help_text="User who sent this message"
-    )
-    conversation = models.ForeignKey(
-        Conversation,
-        on_delete=models.CASCADE,
-        related_name='messages',
-        help_text="Conversation this message belongs to"
-    )
-    
-    # Message content
-    message_body = models.TextField(
-        help_text="Content of the message"
-    )
-    
-    # Timestamps
-    sent_at = models.DateTimeField(
-        auto_now_add=True,
-        help_text="Timestamp when message was sent"
-    )
-    
-    # Read receipt tracking
-    is_read = models.BooleanField(
-        default=False,
-        help_text="Whether this message has been read by recipient(s)"
-    )
-    read_at = models.DateTimeField(
-        null=True,
-        blank=True,
-        help_text="Timestamp when message was first read"
-    )
-    
-    # Soft deletion
-    is_deleted = models.BooleanField(
-        default=False,
-        help_text="Whether this message has been soft deleted"
-    )
-    deleted_at = models.DateTimeField(
-        null=True,
-        blank=True,
-        help_text="Timestamp when message was deleted (if soft deleted)"
-    )
-    deleted_by = models.ForeignKey(
-        User,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='deleted_messages',
-        help_text="User who deleted this message"
-    )
-    
-    # Additional metadata
-    reply_to = models.ForeignKey(
-        'self',
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='replies',
-        help_text="Message this is a reply to (if applicable)"
-    )
-    
-    # Manager
-    objects = MessageManager()
-    
-    class Meta:
-        """Database configuration for Message model."""
-        db_table = 'messages'
-        verbose_name = 'Message'
-        verbose_name_plural = 'Messages'
-        
-        # Indexing strategy for optimal query performance
-        indexes = [
-            # Primary key is automatically indexed
-            models.Index(fields=['conversation', 'sent_at'], name='message_conversation_sent_idx'),
-            models.Index(fields=['sender', 'sent_at'], name='message_sender_sent_idx'),
-            models.Index(fields=['is_read'], name='message_read_idx'),
-            models.Index(fields=['is_deleted'], name='message_deleted_idx'),
-            models.Index(fields=['sent_at'], name='message_sent_idx'),
-            models.Index(fields=['conversation', 'is_read'], name='message_conversation_read_idx'),
-            models.Index(fields=['conversation', 'is_deleted'], name='message_conversation_deleted_idx'),
-            # Composite index for message retrieval in conversations
-            models.Index(
-                fields=['conversation', 'sent_at', 'is_deleted'],
-                name='message_conversation_sent_deleted_idx'
-            ),
-            # Index for reply threading
-            models.Index(fields=['reply_to'], name='message_reply_to_idx'),
-        ]
-        
-        # Constraints for data integrity
-        constraints = [
-            models.CheckConstraint(
-                check=models.Q(message_body__isnull=False) & models.Q(message_body__gt=''),
-                name='non_empty_message_body'
-            ),
-            models.CheckConstraint(
-                check=models.Q(message_body__length__lte=5000),
-                name='message_length_limit'
-            ),
-            models.CheckConstraint(
-                check=models.Q(read_at__isnull=True) | models.Q(is_read=True),
-                name='read_at_requires_is_read'
-            ),
-            models.CheckConstraint(
-                check=models.Q(deleted_at__isnull=True) | models.Q(is_deleted=True),
-                name='deleted_at_requires_is_deleted'
-            ),
-        ]
-        
-        # Ordering for efficient retrieval
-        ordering = ['-sent_at']
-    
-    def __str__(self):
-        """String representation of the message."""
-        content_preview = self.message_body[:50]
-        if len(self.message_body) > 50:
-            content_preview += "..."
-        return f"Message from {self.sender.display_name}: {content_preview}"
-    
-    def clean(self):
-        """Validate message data."""
-        super().clean()
-        
-        # Validate that sender is participant in conversation
-        if self.conversation and self.sender:
-            if not self.conversation.is_participant(self.sender):
-                raise ValidationError(
-                    f"Sender {self.sender.email} is not a participant in conversation {self.conversation.conversation_id}"
-                )
-        
-        # Validate reply_to relationship
-        if self.reply_to and self.reply_to.conversation != self.conversation:
-            raise ValidationError(
-                "Reply-to message must be from the same conversation"
-            )
-    
-    def save(self, *args, **kwargs):
-        """Save message with validation and read status updates."""
-        # Set read_at when message is marked as read
-        if self.is_read and not self.read_at:
-            self.read_at = timezone.now()
-        
-        # Set deleted_at when message is soft deleted
-        if self.is_deleted and not self.deleted_at:
-            self.deleted_at = timezone.now()
-        
-        # Validate before save
-        self.full_clean()
-        super().save(*args, **kwargs)
-    
-    def mark_as_read(self, reader):
-        """
-        Mark message as read by a specific user.
-        
-        Args:
-            reader: User who read the message
-        
-        Raises:
-            ValidationError: If user cannot read this message
-        """
-        if not self.conversation.is_participant(reader):
-            raise ValidationError(
-                f"User {reader.email} is not a participant in this conversation"
-            )
-        
-        if not self.is_read:
-            self.is_read = True
-            self.read_at = timezone.now()
-            self.save(update_fields=['is_read', 'read_at'])
-    
-    def soft_delete(self, deleter):
-        """
-        Soft delete this message.
-        
-        Args:
-            deleter: User who is deleting the message
-        
-        Raises:
-            ValidationError: If user cannot delete this message
-        """
-        # Check if user can delete (sender, conversation admin, or system admin)
-        can_delete = (
-            self.sender == deleter or
-            self.conversation.get_admin_participants().filter(id=deleter.id).exists() or
-            deleter.can_moderate()
-        )
-        
-        if not can_delete:
-            raise ValidationError(
-                f"User {deleter.email} does not have permission to delete this message"
-            )
-        
-        if not self.is_deleted:
-            self.is_deleted = True
-            self.deleted_at = timezone.now()
-            self.deleted_by = deleter
-            self.save(update_fields=['is_deleted', 'deleted_at', 'deleted_by'])
-    
-    def get_read_by(self):
-        """Get list of users who have read this message."""
-        # This could be extended to track individual read receipts
-        return [self.sender] if self.is_read else []
-    
-    def get_replies(self):
-        """Get all replies to this message."""
-        return self.replies.filter(is_deleted=False).order_by('sent_at')
-    
-    def get_thread_depth(self):
-        """Get the depth of this message in the reply thread."""
-        depth = 0
-        current = self.reply_to
-        while current:
-            depth += 1
-            current = current.reply_to
-        return depth
+### Create New Conversation
+```
+POST /api/v1/conversations/
+Content-Type: application/json
+
+{
+    "title": "Project Discussion",
+    "participant_ids": [
+        "550e8400-e29b-41d4-a716-446655440001",
+        "550e8400-e29b-41d4-a716-446655440002"
+    ]
+}
+```
+
+**Response (201 Created)**:
+```json
+{
+    "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
+    "title": "Project Discussion",
+    "participants": [
+        {
+            "user_id": "550e8400-e29b-41d4-a716-446655440000",
+            "email": "user@example.com",
+            "first_name": "John",
+            "last_name": "Doe",
+            "display_name": "John Doe",
+            "role": "host"
+        }
+    ],
+    "message_count": 0,
+    "created_at": "2023-11-17T10:00:00Z",
+    "is_active": true
+}
+```
+
+### Get Conversation Details
+```
+GET /api/v1/conversations/{conversation_id}/
+```
+
+**Response (200 OK)**:
+```json
+{
+    "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
+    "title": "Team Chat",
+    "participants": [
+        {
+            "user_id": "550e8400-e29b-41d4-a716-446655440000",
+            "email": "user@example.com",
+            "first_name": "John",
+            "last_name": "Doe",
+            "display_name": "John Doe",
+            "role": "host"
+        }
+    ],
+    "admin_participants": [],
+    "conversation_admin_participants": [],
+    "message_count": 15,
+    "last_message": {
+        "message_id": "550e8400-e29b-41d4-a716-446655440001",
+        "message_body": "Hello everyone!",
+        "sender_info": {
+            "user_id": "550e8400-e29b-41d4-a716-446655440001",
+            "first_name": "Jane",
+            "last_name": "Smith",
+            "display_name": "Jane Smith"
+        },
+        "sent_at": "2023-11-17T10:30:00Z",
+        "is_deleted": false
+    },
+    "created_at": "2023-11-17T10:00:00Z",
+    "is_active": true
+}
+```
+
+### Add Participant to Conversation
+```
+POST /api/v1/conversations/{conversation_id}/add_participant/
+Content-Type: application/json
+
+{
+    "user_id": "550e8400-e29b-41d4-a716-446655440001"
+}
+```
+
+**Response (200 OK)**:
+```json
+{
+    "detail": "Participant added successfully."
+}
+```
+
+### Remove Participant from Conversation
+```
+POST /api/v1/conversations/{conversation_id}/remove_participant/
+Content-Type: application/json
+
+{
+    "user_id": "550e8400-e29b-41d4-a716-446655440001"
+}
+```
+
+**Response (200 OK)**:
+```json
+{
+    "detail": "Participant removed successfully."
+}
+```
+
+## 💬 Message Management
+
+### List Conversation Messages
+```
+GET /api/v1/conversations/{conversation_id}/messages/
+```
+
+**Response (200 OK)**:
+```json
+{
+    "count": 10,
+    "next": null,
+    "previous": null,
+    "results": [
+        {
+            "message_id": "550e8400-e29b-41d4-a716-446655440000",
+            "message_body": "Hello everyone! Welcome to our team chat.",
+            "sender_info": {
+                "user_id": "550e8400-e29b-41d4-a716-446655440001",
+                "first_name": "Jane",
+                "last_name": "Smith",
+                "display_name": "Jane Smith"
+            },
+            "reply_to_info": null,
+            "sent_at": "2023-11-17T10:00:00Z",
+            "is_deleted": false
+        }
+    ]
+}
+```
+
+### Send New Message
+```
+POST /api/v1/conversations/{conversation_id}/messages/
+Content-Type: application/json
+
+{
+    "message_body": "This is a test message to the conversation.",
+    "reply_to": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+**Response (201 Created)**:
+```json
+{
+    "message_id": "550e8400-e29b-41d4-a716-446655440001",
+    "message_body": "This is a test message to the conversation.",
+    "sender": "550e8400-e29b-41d4-a716-446655440000",
+    "conversation": "550e8400-e29b-41d4-a716-446655440002",
+    "reply_to": "550e8400-e29b-41d4-a716-446655440000",
+    "reply_to_info": {
+        "message_id": "550e8400-e29b-41d4-a716-446655440000",
+        "content": "Original message content...",
+        "sender": {
+            "user_id": "550e8400-e29b-41d4-a716-446655440001",
+            "first_name": "Jane",
+            "last_name": "Smith",
+            "display_name": "Jane Smith"
+        }
+    },
+    "sent_at": "2023-11-17T10:30:00Z",
+    "is_deleted": false,
+    "deleted_at": null,
+    "sender_info": {
+        "user_id": "550e8400-e29b-41d4-a716-446655440000",
+        "first_name": "John",
+        "last_name": "Doe",
+        "display_name": "John Doe"
+    },
+    "conversation_info": {
+        "conversation_id": "550e8400-e29b-41d4-a716-446655440002",
+        "title": "Team Chat",
+        "participant_count": 3
+    },
+    "can_edit": true,
+    "can_delete": true
+}
+```
+
+### Get Individual Message
+```
+GET /api/v1/messages/{message_id}/
+```
+
+**Response (200 OK)**:
+```json
+{
+    "message_id": "550e8400-e29b-41d4-a716-446655440001",
+    "message_body": "This is a test message.",
+    "sender": "550e8400-e29b-41d4-a716-446655440000",
+    "conversation": "550e8400-e29b-41d4-a716-446655440002",
+    "reply_to": "550e8400-e29b-41d4-a716-446655440000",
+    "reply_to_info": {
+        "message_id": "550e8400-e29b-41d4-a716-446655440000",
+        "content": "Original message...",
+        "sender": {
+            "user_id": "550e8400-e29b-41d4-a716-446655440001",
+            "first_name": "Jane",
+            "last_name": "Smith",
+            "display_name": "Jane Smith"
+        }
+    },
+    "sent_at": "2023-11-17T10:30:00Z",
+    "is_deleted": false,
+    "deleted_at": null,
+    "sender_info": {
+        "user_id": "550e8400-e29b-41d4-a716-446655440000",
+        "first_name": "John",
+        "last_name": "Doe",
+        "display_name": "John Doe"
+    },
+    "conversation_info": {
+        "conversation_id": "550e8400-e29b-41d4-a716-446655440002",
+        "title": "Team Chat",
+        "participant_count": 3
+    },
+    "can_edit": true,
+    "can_delete": true
+}
+```
+
+### Update Message
+```
+PUT /api/v1/messages/{message_id}/
+Content-Type: application/json
+
+{
+    "message_body": "Updated message content."
+}
+```
+
+**Response (200 OK)**:
+```json
+{
+    "message_id": "550e8400-e29b-41d4-a716-446655440001",
+    "message_body": "Updated message content.",
+    "sender": "550e8400-e29b-41d4-a716-446655440000",
+    "conversation": "550e8400-e29b-41d4-a716-446655440002",
+    "sent_at": "2023-11-17T10:30:00Z",
+    "is_deleted": false,
+    "deleted_at": null,
+    "sender_info": {
+        "user_id": "550e8400-e29b-41d4-a716-446655440000",
+        "first_name": "John",
+        "last_name": "Doe",
+        "display_name": "John Doe"
+    },
+    "conversation_info": {
+        "conversation_id": "550e8400-e29b-41d4-a716-446655440002",
+        "title": "Team Chat",
+        "participant_count": 3
+    },
+    "can_edit": true,
+    "can_delete": true
+}
+```
+
+### Delete Message
+```
+DELETE /api/v1/messages/{message_id}/
+```
+
+**Response (200 OK)**:
+```json
+{
+    "detail": "Message deleted successfully."
+}
+```
+
+### Mark Message as Read
+```
+POST /api/v1/messages/{message_id}/mark_read/
+```
+
+**Response (200 OK)**:
+```json
+{
+    "detail": "Message marked as read."
+}
+```
+
+## ❌ Error Responses
+
+### 400 Bad Request
+```json
+{
+    "detail": "Message content cannot be empty.",
+    "errors": {
+        "message_body": ["Message content cannot be empty."]
+    }
+}
+```
+
+### 403 Forbidden
+```json
+{
+    "detail": "You are not authorized to access this conversation."
+}
+```
+
+### 404 Not Found
+```json
+{
+    "detail": "Conversation not found."
+}
+```
+
+### 409 Conflict
+```json
+{
+    "detail": "User is already a participant in this conversation."
+}
+```
+
+## 🔒 Permissions and Access Control
+
+### Role-Based Access
+- **Guest**: Limited access, cannot create conversations
+- **Host**: Can create conversations, manage their own messages
+- **Admin**: Full access, can moderate any conversation
+
+### Conversation Participation
+- Only conversation participants can view messages
+- Only participants can send messages to the conversation
+- Conversation admins can manage participants
+
+### Message Ownership
+- Message senders can edit and delete their own messages
+- Conversation admins can delete any message in their conversations
+- Global admins can delete any message
+
+## 📊 Pagination
+
+All list endpoints support pagination using page and page_size query parameters:
+
+```
+GET /api/v1/conversations/?page=1&page_size=20
+```
+
+**Response includes pagination metadata**:
+```json
+{
+    "count": 100,
+    "next": "http://localhost:8000/api/v1/conversations/?page=2",
+    "previous": null,
+    "results": [...]
+}
+```
+
+## 🔍 Filtering and Search
+
+### User Search
+```
+GET /api/v1/users/?search=john&role=host
+```
+
+### Message Filtering
+Messages can be filtered by date ranges and sender:
+```
+GET /api/v1/conversations/{conversation_id}/messages/?sender=550e8400-e29b-41d4-a716-446655440000&start_date=2023-11-01&end_date=2023-11-30
+```
+
+## 🚀 API Features
+
+### Comprehensive Validation
+- Email uniqueness validation
+- Role validation
+- Message content validation (non-empty, max 5000 chars)
+- Conversation participant validation
+- Message sender validation
+
+### Real-time Updates
+- Automatic timestamp updates on message creation
+- Read receipt tracking
+- Conversation activity tracking
+
+### Permission System
+- Granular permission checks
+- Role-based access control
+- Conversation-level permissions
+- Message ownership validation
+
+### Error Handling
+- Consistent error response format
+- Detailed error messages
+- Proper HTTP status codes
+- Validation error aggregation
+
+### Documentation
+- Interactive API documentation available at `/api/docs/`
+- OpenAPI/Swagger specification
+- ReDoc documentation at `/api/docs/redoc/`
+
+## 🛠️ Testing the API
+
+### Authentication Test
+```bash
+# Login
+curl -X POST http://localhost:8000/api/v1/auth/login/ \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com","password":"password123"}'
+
+# Use the access token for authenticated requests
+curl -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  http://localhost:8000/api/v1/conversations/
+```
+
+### Create Conversation
+```bash
+curl -X POST http://localhost:8000/api/v1/conversations/ \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Test Chat","participant_ids":["USER_ID_1","USER_ID_2"]}'
+```
+
+### Send Message
+```bash
+curl -X POST http://localhost:8000/api/v1/conversations/CONVERSATION_ID/messages/ \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"message_body":"Hello World!"}'
+```
+
+## 📈 Performance Considerations
+
+### Database Optimization
+- Efficient query patterns with select_related and prefetch_related
+- Proper database indexing for fast lookups
+- Optimized pagination for large datasets
+
+### Caching Strategy
+- Conversation list caching for better performance
+- User profile caching to reduce database load
+- Message history caching for active conversations
+
+### Rate Limiting
+- API rate limiting to prevent abuse
+- Per-user rate limiting
+- Different limits for different endpoint types
+
+This API implementation provides a complete, production-ready solution for managing messaging platform interactions with comprehensive validation, security, and performance optimizations.

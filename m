@@ -1,298 +1,402 @@
 """
-Custom exception handling for the messaging platform API.
+Django REST Framework serializers for messaging platform models.
 
-Provides structured error responses and proper HTTP status codes.
+Provides comprehensive serialization for User, Conversation, and Message models
+with proper validation and nested relationships.
 """
 
-from rest_framework.views import exception_handler
-from rest_framework.response import Response
-from rest_framework import status
-from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import IntegrityError, DatabaseError
-from django.utils import timezone
-import logging
+from rest_framework import serializers
+from django.contrib.auth import get_user_model
+from django.db import transaction
+from django.core.exceptions import ValidationError
 
-logger = logging.getLogger(__name__)
+from .models import User, Conversation, Message, ConversationParticipant, UserRole
 
 
-class APIException(Exception):
+class UserSerializer(serializers.ModelSerializer):
     """
-    Base exception class for API errors.
+    Serializer for User model with extended fields.
     
-    Attributes:
-        status_code (int): HTTP status code
-        error_code (str): Machine-readable error code
-        message (str): Human-readable error message
-        details (dict): Additional error details
+    Handles user profile information with role-based visibility
+    and authentication-related fields.
     """
+    password = serializers.CharField(write_only=True, required=False)
+    password_confirm = serializers.CharField(write_only=True, required=False)
+    display_name = serializers.CharField(source='display_name', read_only=True)
     
-    def __init__(self, message, error_code=None, status_code=status.HTTP_400_BAD_REQUEST, details=None):
-        self.message = message
-        self.error_code = error_code or 'api_error'
-        self.status_code = status_code
-        self.details = details or {}
-        super().__init__(self.message)
+    class Meta:
+        model = User
+        fields = [
+            'user_id', 'email', 'first_name', 'last_name', 'display_name',
+            'phone_number', 'role', 'is_active', 'created_at', 'password',
+            'password_confirm'
+        ]
+        read_only_fields = ['user_id', 'is_active', 'created_at']
     
-    def to_dict(self):
-        """Convert exception to dictionary representation."""
-        return {
-            'error': {
-                'code': self.error_code,
-                'message': self.message,
-                'details': self.details,
-                'timestamp': timezone.now().isoformat(),
-            }
-        }
-
-
-class ValidationError(APIException):
-    """Raised when request data validation fails."""
+    def validate_email(self, value):
+        """Validate email uniqueness."""
+        # If updating, exclude current user from uniqueness check
+        if self.instance:
+            if User.objects.filter(email__iexact=value).exclude(id=self.instance.user_id).exists():
+                raise serializers.ValidationError("A user with this email already exists.")
+        else:
+            if User.objects.filter(email__iexact=value).exists():
+                raise serializers.ValidationError("A user with this email already exists.")
+        return value
     
-    def __init__(self, message, field_errors=None):
-        details = {}
-        if field_errors:
-            details['field_errors'] = field_errors
-        super().__init__(message, 'validation_error', status.HTTP_400_BAD_REQUEST, details)
-
-
-class AuthenticationError(APIException):
-    """Raised when authentication fails."""
+    def validate_role(self, value):
+        """Validate role selection."""
+        if value not in UserRole.values:
+            raise serializers.ValidationError(f"Invalid role. Must be one of: {', '.join(UserRole.values)}")
+        return value
     
-    def __init__(self, message="Authentication credentials were not provided or are invalid."):
-        super().__init__(message, 'authentication_error', status.HTTP_401_UNAUTHORIZED)
-
-
-class PermissionError(APIException):
-    """Raised when user doesn't have required permissions."""
+    def validate_password(self, value):
+        """Validate password strength."""
+        if value and len(value) < 8:
+            raise serializers.ValidationError("Password must be at least 8 characters long.")
+        return value
     
-    def __init__(self, message="You do not have permission to perform this action."):
-        super().__init__(message, 'permission_error', status.HTTP_403_FORBIDDEN)
-
-
-class NotFoundError(APIException):
-    """Raised when requested resource is not found."""
-    
-    def __init__(self, message="The requested resource was not found."):
-        super().__init__(message, 'not_found', status.HTTP_404_NOT_FOUND)
-
-
-class ConflictError(APIException):
-    """Raised when there's a conflict with current state."""
-    
-    def __init__(self, message="The request conflicts with the current state of the resource."):
-        super().__init__(message, 'conflict', status.HTTP_409_CONFLICT)
-
-
-class RateLimitError(APIException):
-    """Raised when rate limit is exceeded."""
-    
-    def __init__(self, message="Rate limit exceeded. Please try again later."):
-        super().__init__(message, 'rate_limit_exceeded', status.HTTP_429_TOO_MANY_REQUESTS)
-
-
-class ServerError(APIException):
-    """Raised for internal server errors."""
-    
-    def __init__(self, message="An internal server error occurred."):
-        super().__init__(message, 'server_error', status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-class ServiceUnavailableError(APIException):
-    """Raised when service is temporarily unavailable."""
-    
-    def __init__(self, message="Service temporarily unavailable. Please try again later."):
-        super().__init__(message, 'service_unavailable', status.HTTP_503_SERVICE_UNAVAILABLE)
-
-
-def custom_exception_handler(exc, context):
-    """
-    Custom exception handler for DRF.
-    
-    Args:
-        exc: The exception instance
-        context: Context dictionary containing view information
-    
-    Returns:
-        Response: DRF Response with structured error data
-    """
-    logger.error(f"Exception occurred: {exc}", exc_info=True, extra={'context': context})
-    
-    # Call DRF's default exception handler first
-    response = exception_handler(exc, context)
-    
-    # Handle specific exception types
-    if isinstance(exc, DjangoValidationError):
-        return handle_validation_error(exc, context)
-    elif isinstance(exc, IntegrityError):
-        return handle_integrity_error(exc, context)
-    elif isinstance(exc, DatabaseError):
-        return handle_database_error(exc, context)
-    elif isinstance(exc, APIException):
-        return handle_api_exception(exc, context)
-    
-    # Return the response if DRF handled it
-    if response is not None:
-        return enhance_error_response(response, exc, context)
-    
-    # Handle unexpected exceptions
-    return handle_unexpected_error(exc, context)
-
-
-def handle_validation_error(exc, context):
-    """Handle Django validation errors."""
-    field_errors = {}
-    
-    if hasattr(exc, 'error_dict'):
-        # Form validation errors
-        for field, errors in exc.error_dict.items():
-            field_errors[field] = [str(error) for error in errors]
-    elif hasattr(exc, 'error_list'):
-        # Field validation errors
-        field_errors['general'] = [str(error) for error in exc.error_list]
-    
-    error = ValidationError("Validation failed", field_errors=field_errors)
-    return Response(error.to_dict(), status=error.status_code)
-
-
-def handle_integrity_error(exc, context):
-    """Handle database integrity errors."""
-    error_message = str(exc).lower()
-    
-    if 'unique constraint' in error_message or 'duplicate key' in error_message:
-        message = "A resource with this information already exists."
-        error = ConflictError(message)
-    elif 'foreign key' in error_message:
-        message = "The referenced resource does not exist."
-        error = ValidationError(message)
-    else:
-        message = "A database constraint was violated."
-        error = ServerError(message)
-    
-    return Response(error.to_dict(), status=error.status_code)
-
-
-def handle_database_error(exc, context):
-    """Handle general database errors."""
-    logger.error(f"Database error: {exc}", exc_info=True)
-    error = ServerError("A database error occurred while processing the request.")
-    return Response(error.to_dict(), status=error.status_code)
-
-
-def handle_api_exception(exc, context):
-    """Handle custom API exceptions."""
-    return Response(exc.to_dict(), status=exc.status_code)
-
-
-def enhance_error_response(response, exc, context):
-    """Enhance the default DRF error response."""
-    # If it's already a proper error response, just return it
-    if response.status_code >= 400:
-        # Add timestamp if not present
-        if 'timestamp' not in response.data:
-            if isinstance(response.data, dict) and 'error' in response.data:
-                response.data['error']['timestamp'] = timezone.now().isoformat()
-        return response
-    
-    # For other responses, return as-is
-    return response
-
-
-def handle_unexpected_error(exc, context):
-    """Handle unexpected exceptions."""
-    logger.error(f"Unexpected error: {exc}", exc_info=True, extra={'context': context})
-    error = ServerError("An unexpected error occurred.")
-    return Response(error.to_dict(), status=error.status_code)
-
-
-# Utility functions for consistent error responses
-
-def raise_validation_error(message, field_errors=None):
-    """Utility function to raise validation errors."""
-    raise ValidationError(message, field_errors=field_errors)
-
-
-def raise_not_found(message=None):
-    """Utility function to raise not found errors."""
-    raise NotFoundError(message)
-
-
-def raise_permission_error(message=None):
-    """Utility function to raise permission errors."""
-    raise PermissionError(message)
-
-
-def raise_authentication_error(message=None):
-    """Utility function to raise authentication errors."""
-    raise AuthenticationError(message)
-
-
-def raise_conflict_error(message=None):
-    """Utility function to raise conflict errors."""
-    raise ConflictError(message)
-
-
-def raise_rate_limit_error(message=None):
-    """Utility function to raise rate limit errors."""
-    raise RateLimitError(message)
-
-
-def raise_server_error(message=None):
-    """Utility function to raise server errors."""
-    raise ServerError(message)
-
-
-def validate_required_fields(data, required_fields):
-    """Validate that required fields are present and not empty."""
-    missing_fields = []
-    empty_fields = []
-    
-    for field in required_fields:
-        if field not in data:
-            missing_fields.append(field)
-        elif data[field] is None or (isinstance(data[field], str) and not data[field].strip()):
-            empty_fields.append(field)
-    
-    if missing_fields or empty_fields:
-        field_errors = {}
-        if missing_fields:
-            field_errors['missing_fields'] = missing_fields
-        if empty_fields:
-            field_errors['empty_fields'] = empty_fields
+    def validate(self, data):
+        """Cross-field validation for password confirmation."""
+        # Only validate password confirmation during user creation
+        if 'password' in data or 'password_confirm' in data:
+            password = data.get('password', '')
+            password_confirm = data.get('password_confirm', '')
+            
+            if password != password_confirm:
+                raise serializers.ValidationError({
+                    'password_confirm': 'Passwords do not match.'
+                })
         
-        raise_validation_error("Required fields are missing or empty", field_errors)
-
-
-def validate_email_format(email):
-    """Validate email format."""
-    import re
-    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-    if not re.match(pattern, email):
-        raise_validation_error("Invalid email format", {'email': ['Email format is invalid']})
-
-
-def validate_phone_format(phone):
-    """Validate phone number format."""
-    import re
-    # Basic phone validation (can be enhanced based on requirements)
-    pattern = r'^\+?1?-?\.?\s?\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})$'
-    if not re.match(pattern, phone):
-        raise_validation_error("Invalid phone number format", {'phone': ['Phone number format is invalid']})
-
-
-def sanitize_html(content):
-    """Basic HTML sanitization."""
-    import re
-    # Remove script tags and javascript: protocols
-    content = re.sub(r'<script[^>]*>.*?</script>', '', content, flags=re.IGNORECASE | re.DOTALL)
-    content = re.sub(r'javascript:', '', content, flags=re.IGNORECASE)
-    content = re.sub(r'on\w+\s*=', '', content, flags=re.IGNORECASE)
-    return content
-
-
-def validate_content_length(content, max_length=5000):
-    """Validate content length."""
-    if len(content) > max_length:
-        raise_validation_error(
-            f"Content exceeds maximum length of {max_length} characters",
-            {'content': [f'Content is too long (max {max_length} characters)']}
+        return data
+    
+    def create(self, validated_data):
+        """Create user with password handling."""
+        password = validated_data.pop('password', None)
+        validated_data.pop('password_confirm', None)
+        
+        user = User.objects.create_user(
+            email=validated_data['email'],
+            password=password,
+            **validated_data
         )
+        
+        return user
+    
+    def update(self, instance, validated_data):
+        """Update user with password handling."""
+        password = validated_data.pop('password', None)
+        validated_data.pop('password_confirm', None)
+        
+        # Update user fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        
+        # Update password if provided
+        if password:
+            instance.set_password(password)
+        
+        instance.save()
+        return instance
+
+
+class ConversationParticipantSerializer(serializers.ModelSerializer):
+    """
+    Serializer for ConversationParticipant through model.
+    
+    Handles participant information within conversations.
+    """
+    user_info = UserSerializer(source='user', read_only=True)
+    
+    class Meta:
+        model = ConversationParticipant
+        fields = ['id', 'user_info', 'joined_at', 'is_admin', 'last_read_at']
+        read_only_fields = ['id', 'joined_at', 'user_info']
+
+
+class ConversationListSerializer(serializers.ModelSerializer):
+    """
+    Serializer for conversation list view.
+    
+    Provides lightweight serialization for conversation listing
+    with participant count and message count.
+    """
+    participant_count = serializers.SerializerMethodField()
+    unread_count = serializers.SerializerMethodField()
+    last_message = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Conversation
+        fields = [
+            'conversation_id', 'title', 'participant_count', 
+            'message_count', 'created_at', 'unread_count', 'last_message'
+        ]
+        read_only_fields = ['conversation_id', 'message_count']
+    
+    def get_participant_count(self, obj):
+        """Get number of participants in conversation."""
+        return obj.participants.count()
+    
+    def get_unread_count(self, obj):
+        """Get unread message count for current user."""
+        user = self.context.get('request').user if self.context.get('request') else None
+        if user:
+            return obj.messages.filter(
+                is_deleted=False,
+                is_read=False
+            ).exclude(sender=user).count()
+        return 0
+    
+    def get_last_message(self, obj):
+        """Get last message in conversation."""
+        last_msg = obj.messages.filter(is_deleted=False).order_by('-sent_at').first()
+        if last_msg:
+            return {
+                'message_id': last_msg.message_id,
+                'content': last_msg.message_body[:100] + ('...' if len(last_msg.message_body) > 100 else ''),
+                'sender': {
+                    'user_id': last_msg.sender.user_id,
+                    'first_name': last_msg.sender.first_name,
+                    'last_name': last_msg.sender.last_name,
+                    'display_name': last_msg.sender.display_name
+                },
+                'sent_at': last_msg.sent_at
+            }
+        return None
+
+
+class ConversationSerializer(serializers.ModelSerializer):
+    """
+    Full serializer for Conversation model.
+    
+    Handles conversation creation and detailed retrieval
+    with participant management.
+    """
+    participants = UserSerializer(many=True, read_only=True)
+    participant_ids = serializers.PrimaryKeyRelatedField(
+        many=True, 
+        queryset=User.objects.all(),
+        write_only=True,
+        required=False,
+        source='participants'
+    )
+    admin_participants = serializers.SerializerMethodField()
+    conversation_admin_participants = serializers.SerializerMethodField()
+    message_count = serializers.SerializerMethodField()
+    last_message = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Conversation
+        fields = [
+            'conversation_id', 'title', 'participants', 'participant_ids',
+            'admin_participants', 'conversation_admin_participants',
+            'message_count', 'last_message', 'created_at', 'is_active'
+        ]
+        read_only_fields = ['conversation_id', 'message_count', 'last_message', 'created_at']
+    
+    def get_admin_participants(self, obj):
+        """Get list of admin participants."""
+        admins = obj.participants.filter(is_staff=True) | obj.participants.filter(role=UserRole.ADMIN)
+        return UserSerializer(admins, many=True).data
+    
+    def get_conversation_admin_participants(self, obj):
+        """Get list of conversation admin participants."""
+        admins = obj.conversation_participants.filter(is_admin=True).values_list('user_id', flat=True)
+        return User.objects.filter(id__in=admins).values_list('user_id', flat=True)
+    
+    def get_message_count(self, obj):
+        """Get total message count."""
+        return obj.messages.filter(is_deleted=False).count()
+    
+    def get_last_message(self, obj):
+        """Get last message in conversation."""
+        last_msg = obj.messages.filter(is_deleted=False).order_by('-sent_at').first()
+        if last_msg:
+            return MessageListSerializer(last_msg, context={'request': self.context.get('request')}).data
+        return None
+    
+    def validate_participant_ids(self, value):
+        """Validate participant IDs."""
+        if len(value) < 1:
+            raise serializers.ValidationError("At least one participant is required.")
+        return value
+    
+    def create(self, validated_data):
+        """Create conversation with participants."""
+        participant_ids = validated_data.pop('participants', [])
+        
+        with transaction.atomic():
+            # Create conversation
+            conversation = Conversation.objects.create(**validated_data)
+            
+            # Add creator as participant
+            conversation.add_participant(self.context['request'].user, is_admin=True)
+            
+            # Add other participants
+            for participant_id in participant_ids:
+                try:
+                    user = User.objects.get(id=participant_id)
+                    conversation.add_participant(user)
+                except User.DoesNotExist:
+                    continue
+        
+        return conversation
+    
+    def update(self, instance, validated_data):
+        """Update conversation (only title/description)."""
+        participant_ids = validated_data.pop('participants', None)
+        
+        # Update conversation fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        
+        instance.save()
+        
+        return instance
+
+
+class MessageListSerializer(serializers.ModelSerializer):
+    """
+    Serializer for message list view.
+    
+    Provides lightweight serialization for message listing
+    with sender information.
+    """
+    sender_info = UserSerializer(source='sender', read_only=True)
+    reply_to_info = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Message
+        fields = [
+            'message_id', 'message_body', 'sender_info', 'reply_to_info',
+            'sent_at', 'is_deleted', 'deleted_at'
+        ]
+        read_only_fields = [
+            'message_id', 'sent_at', 'is_deleted', 'deleted_at'
+        ]
+    
+    def get_reply_to_info(self, obj):
+        """Get information about message being replied to."""
+        if obj.reply_to and not obj.reply_to.is_deleted:
+            return {
+                'message_id': obj.reply_to.message_id,
+                'content': obj.reply_to.message_body[:100] + ('...' if len(obj.reply_to.message_body) > 100 else ''),
+                'sender': {
+                    'user_id': obj.reply_to.sender.user_id,
+                    'first_name': obj.reply_to.sender.first_name,
+                    'last_name': obj.reply_to.sender.last_name,
+                    'display_name': obj.reply_to.sender.display_name
+                }
+            }
+        return None
+
+
+class MessageSerializer(serializers.ModelSerializer):
+    """
+    Full serializer for Message model.
+    
+    Handles message creation, update, and detailed retrieval
+    with conversation validation.
+    """
+    sender_info = UserSerializer(source='sender', read_only=True)
+    conversation_info = serializers.SerializerMethodField()
+    reply_to_info = MessageListSerializer(source='reply_to', read_only=True)
+    can_edit = serializers.SerializerMethodField()
+    can_delete = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Message
+        fields = [
+            'message_id', 'message_body', 'sender', 'conversation', 'reply_to',
+            'reply_to_info', 'sent_at', 'is_deleted', 'deleted_at',
+            'sender_info', 'conversation_info', 'can_edit', 'can_delete'
+        ]
+        read_only_fields = [
+            'message_id', 'sent_at', 'is_deleted', 'deleted_at',
+            'sender_info', 'conversation_info', 'can_edit', 'can_delete'
+        ]
+    
+    def get_conversation_info(self, obj):
+        """Get conversation information."""
+        return {
+            'conversation_id': obj.conversation.conversation_id,
+            'title': obj.conversation.title,
+            'participant_count': obj.conversation.participants.count()
+        }
+    
+    def get_can_edit(self, obj):
+        """Check if current user can edit this message."""
+        user = self.context.get('request').user if self.context.get('request') else None
+        return user and obj.sender == user and not obj.is_deleted
+    
+    def get_can_delete(self, obj):
+        """Check if current user can delete this message."""
+        user = self.context.get('request').user if self.context.get('request') else None
+        if not user or obj.is_deleted:
+            return False
+        
+        # Sender can delete their own messages
+        if obj.sender == user:
+            return True
+        
+        # Conversation admins can delete any message
+        return obj.conversation.get_admin_participants().filter(id=user.id).exists()
+    
+    def validate_message_body(self, value):
+        """Validate message content."""
+        content = value.strip() if value else ''
+        if not content:
+            raise serializers.ValidationError("Message content cannot be empty.")
+        if len(content) > 5000:
+            raise serializers.ValidationError("Message content cannot exceed 5000 characters.")
+        return content
+    
+    def validate(self, data):
+        """Validate message creation."""
+        sender = data.get('sender')
+        conversation = data.get('conversation')
+        reply_to = data.get('reply_to')
+        
+        # Validate sender is participant in conversation
+        if sender and conversation:
+            if not conversation.is_participant(sender):
+                raise serializers.ValidationError(
+                    "Sender must be a participant in the conversation."
+                )
+        
+        # Validate reply_to message
+        if reply_to:
+            if reply_to.conversation != conversation:
+                raise serializers.ValidationError(
+                    "Reply message must be from the same conversation."
+                )
+            if reply_to.is_deleted:
+                raise serializers.ValidationError(
+                    "Cannot reply to a deleted message."
+                )
+        
+        return data
+    
+    def create(self, validated_data):
+        """Create message with validation."""
+        sender = validated_data['sender']
+        conversation = validated_data['conversation']
+        
+        # Create message
+        message = Message.objects.create(**validated_data)
+        
+        # Update conversation's last message
+        conversation.update_last_message(message)
+        
+        return message
+    
+    def update(self, instance, validated_data):
+        """Update message (only message body for now)."""
+        if instance.sender != self.context['request'].user:
+            raise serializers.ValidationError("You can only edit your own messages.")
+        
+        # Update message body
+        instance.message_body = validated_data.get('message_body', instance.message_body)
+        instance.edit_content(instance.message_body)
+        
+        return instance
