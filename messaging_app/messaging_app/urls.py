@@ -28,6 +28,7 @@ urlpatterns = [
     path('api/v1/accounts/', include('accounts.urls')),
     path('api/v1/messaging/', include('messaging.urls')),
     path('api/v1/notifications/', include('notifications.urls')),
+    path('api/v1/', include('chats.urls')),  # Include chats app URLs
     path('', RedirectView.as_view(url='/api/v1/docs/', permanent=False)),
 ]
 

@@ -9,6 +9,7 @@ from rest_framework import viewsets, status, generics
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework import filters
 from django.db.models import Q, Count, Max
 from django.shortcuts import get_object_or_404
 from django.core.exceptions import ValidationError
@@ -286,7 +287,7 @@ class ConversationViewSet(viewsets.GenericViewSet):
             )
     
     @action(detail=True, methods=['get'])
-    def messages(self, request, conversation_id=None):
+    def list_messages(self, request, conversation_id=None):
         """
         GET /conversations/{id}/messages/
         
@@ -318,7 +319,7 @@ class ConversationViewSet(viewsets.GenericViewSet):
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['post'])
-    def messages(self, request, conversation_id=None):
+    def send_message(self, request, conversation_id=None):
         """
         POST /conversations/{id}/messages/
         
