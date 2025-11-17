@@ -23,8 +23,8 @@ router.register(r'messages', MessageViewSet, basename='message')
 
 # URL patterns for the application
 urlpatterns = [
-    # Include router URLs
-    path('api/v1/', include(router.urls)),
+    # Include router URLs at root level
+    path('', include(router.urls)),
 ]
 
 # Application name for URL namespace
