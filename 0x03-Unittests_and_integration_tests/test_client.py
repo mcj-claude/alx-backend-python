@@ -2,7 +2,7 @@
 """Unit tests for client module."""
 
 import unittest
-from typing import Dict, Any, List
+from typing import Dict, Any
 from parameterized import parameterized, parameterized_class
 from client import GithubOrgClient
 from unittest.mock import patch, Mock
@@ -23,12 +23,16 @@ class TestGithubOrgClient(unittest.TestCase):
         client = GithubOrgClient(org_name)
         result = client.org
         self.assertEqual(result, {"name": org_name})
-        mock_get_json.assert_called_once_with(f"https://api.github.com/orgs/{org_name}")
+        mock_get_json.assert_called_once_with(
+            f"https://api.github.com/orgs/{org_name}"
+        )
 
     def test_public_repos_url(self) -> None:
         """Test _public_repos_url property returns expected URL."""
         with patch('client.GithubOrgClient.org') as mock_org:
-            mock_org.return_value = {"repos_url": "https://api.github.com/orgs/test/repos"}
+            mock_org.return_value = {
+                "repos_url": "https://api.github.com/orgs/test/repos"
+            }
             client = GithubOrgClient("test")
             result = client._public_repos_url
             self.assertEqual(result, "https://api.github.com/orgs/test/repos")
@@ -50,8 +54,16 @@ class TestGithubOrgClient(unittest.TestCase):
             self.assertEqual(result, apache2_repos)
 
     @parameterized.expand([
-        ({"license": {"key": "my_license"}}, "my_license", True),
-        ({"license": {"key": "other_license"}}, "my_license", False),
+        (
+            {"license": {"key": "my_license"}},
+            "my_license",
+            True,
+        ),
+        (
+            {"license": {"key": "other_license"}},
+            "my_license",
+            False,
+        ),
     ])
     def test_has_license(self, repo: Dict[str, Any], license_key: str, expected: bool) -> None:
         """Test has_license returns True if license matches."""
@@ -61,8 +73,16 @@ class TestGithubOrgClient(unittest.TestCase):
 
 
 @parameterized_class([
-    {"org_payload": org_payload, "repos_payload": repos_payload, "expected_repos": expected_repos},
-    {"org_payload": apache2_repos, "repos_payload": repos_payload, "expected_repos": expected_repos},  # assuming apache2_repos is similar
+    {
+        "org_payload": org_payload,
+        "repos_payload": repos_payload,
+        "expected_repos": expected_repos,
+    },
+    {
+        "org_payload": apache2_repos,
+        "repos_payload": repos_payload,
+        "expected_repos": expected_repos,
+    },  # assuming apache2_repos is similar
 ])
 class TestIntegrationGithubOrgClient(unittest.TestCase):
     """Integration test class for GithubOrgClient."""
@@ -72,7 +92,9 @@ class TestIntegrationGithubOrgClient(unittest.TestCase):
         """Set up class with mocked requests."""
         cls.get_patcher = patch('client.requests.get')
         cls.mock_get = cls.get_patcher.start()
-        cls.mock_get.side_effect = lambda url: Mock(json=lambda: cls.org_payload if "orgs" in url else cls.repos_payload)
+        cls.mock_get.side_effect = lambda url: Mock(
+            json=lambda: cls.org_payload if "orgs" in url else cls.repos_payload
+        )
 
     @classmethod
     def tearDownClass(cls) -> None:
